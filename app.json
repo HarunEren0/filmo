@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Filmo",
+    "slug": "filmo",
+    "version": "1.0.1",
+    "orientation": "portrait",
+    "icon": "./assets/filmo-icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.harun.filmo",
+      "adaptiveIcon": {
+        "backgroundColor": "#1e1e1e",
+        "foregroundImage": "./assets/filmo-icon.png"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Filmo uygulaması profil resminizi güncelleyebilmeniz için galerinize erişim iznine ihtiyaç duyar."
+        }
+      ],
+      "expo-localization",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/filmo-icon.png",
+          "imageWidth": 250,
+          "resizeMode": "contain",
+          "backgroundColor": "#121212"
+        }
+      ],
+      "expo-status-bar"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "77d0ad9c-32b2-4034-ae06-3ef2fa78d5bc"
+      }
+    }
+  }
+}
