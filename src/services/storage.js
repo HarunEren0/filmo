@@ -1,24 +1,114 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SQLite from 'expo-sqlite';
 
-// Kaydedilecek verilerin anahtar kelimeleri
+// Film listeleri SQLite'ta film başına ayrı satırda tutulur; böylece tüm listenin
+// tek bir AsyncStorage değerine sığması gerekmez.
 const WATCHED_MOVIES_KEY = '@watched_movies';
 const WATCHLIST_KEY = '@watchlist';
+const DATABASE_NAME = 'filmo.db';
+const LIST_TABLE = 'movie_lists';
+const MIGRATION_KEY = 'movie_lists_v1_migrated';
+
+let databasePromise;
+
+const compactMovie = (movie, listType) => {
+  const fields = ['id', 'title', 'name', 'poster_path', 'release_date', 'vote_average'];
+  if (listType === 'watched') {
+    fields.push('runtime', 'userRating', 'userReview', 'watchedAt');
+  }
+  return Object.fromEntries(fields.filter(key => movie?.[key] !== undefined).map(key => [key, movie[key]]));
+};
+
+const parseLegacyList = async key => {
+  const value = await AsyncStorage.getItem(key);
+  if (!value) return [];
+  const parsed = JSON.parse(value);
+  return Array.isArray(parsed) ? parsed.filter(movie => movie && movie.id != null) : [];
+};
+
+const getDatabase = () => {
+  if (!databasePromise) {
+    databasePromise = (async () => {
+      const db = await SQLite.openDatabaseAsync(DATABASE_NAME);
+      await db.execAsync(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS ${LIST_TABLE} (
+          list_type TEXT NOT NULL,
+          movie_id TEXT NOT NULL,
+          position INTEGER NOT NULL,
+          movie_json TEXT NOT NULL,
+          PRIMARY KEY (list_type, movie_id)
+        );
+        CREATE TABLE IF NOT EXISTS app_metadata (
+          key TEXT PRIMARY KEY NOT NULL,
+          value TEXT NOT NULL
+        );
+      `);
+
+      const migration = await db.getFirstAsync(
+        'SELECT value FROM app_metadata WHERE key = ?', MIGRATION_KEY
+      );
+      if (!migration) {
+        const watched = await parseLegacyList(WATCHED_MOVIES_KEY);
+        const watchlist = await parseLegacyList(WATCHLIST_KEY);
+        await db.withTransactionAsync(async () => {
+          for (const [listType, movies] of [['watched', watched], ['watchlist', watchlist]]) {
+            for (let index = 0; index < movies.length; index += 1) {
+              const movie = compactMovie(movies[index], listType);
+              await db.runAsync(
+                `INSERT INTO ${LIST_TABLE} (list_type, movie_id, position, movie_json)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT(list_type, movie_id) DO NOTHING`,
+                listType, String(movie.id), movies.length - index, JSON.stringify(movie)
+              );
+            }
+          }
+          await db.runAsync('INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)', MIGRATION_KEY, '1');
+        });
+        // Clear legacy copies only after the full database migration commits.
+        await AsyncStorage.multiRemove([WATCHED_MOVIES_KEY, WATCHLIST_KEY]);
+      }
+      return db;
+    })().catch(error => {
+      databasePromise = undefined;
+      throw error;
+    });
+  }
+  return databasePromise;
+};
+
+const readMovieList = async listType => {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync(
+    `SELECT movie_json FROM ${LIST_TABLE} WHERE list_type = ? ORDER BY position DESC`, listType
+  );
+  return rows.map(row => JSON.parse(row.movie_json));
+};
+
+const addMovieToList = async (listType, movieData) => {
+  const db = await getDatabase();
+  const movie = compactMovie(movieData, listType);
+  if (movie.id == null) return false;
+  const existing = await db.getFirstAsync(
+    `SELECT movie_id FROM ${LIST_TABLE} WHERE list_type = ? AND movie_id = ?`, listType, String(movie.id)
+  );
+  if (existing) return false;
+  const row = await db.getFirstAsync(
+    `SELECT COALESCE(MAX(position), 0) AS max_position FROM ${LIST_TABLE} WHERE list_type = ?`, listType
+  );
+  await db.runAsync(
+    `INSERT INTO ${LIST_TABLE} (list_type, movie_id, position, movie_json) VALUES (?, ?, ?, ?)`,
+    listType, String(movie.id), (row?.max_position || 0) + 1, JSON.stringify(movie)
+  );
+  return true;
+};
 
 /**
  * Filmi "İzledim" olarak kaydeder
  */
 export const saveWatchedMovie = async (movieData) => {
   try {
-    const existingData = await getWatchedMovies();
-    // Film daha önce eklenmiş mi kontrol et
-    const isExist = existingData.find(item => item.id === movieData.id);
-    
-    if (!isExist) {
-      const updatedList = [movieData, ...existingData];
-      await AsyncStorage.setItem(WATCHED_MOVIES_KEY, JSON.stringify(updatedList));
-      return true;
-    }
-    return false;
+    return await addMovieToList('watched', movieData);
   } catch (error) {
     console.error('Film kaydedilemedi:', error);
     return false;
@@ -30,8 +120,7 @@ export const saveWatchedMovie = async (movieData) => {
  */
 export const getWatchedMovies = async () => {
   try {
-    const jsonValue = await AsyncStorage.getItem(WATCHED_MOVIES_KEY);
-    return jsonValue != null ? JSON.parse(jsonValue) : [];
+    return await readMovieList('watched');
   } catch (error) {
     console.error('Filmler getirilemedi:', error);
     return [];
@@ -43,15 +132,7 @@ export const getWatchedMovies = async () => {
  */
 export const saveToWatchlist = async (movieData) => {
   try {
-    const existingData = await getWatchlist();
-    const isExist = existingData.find(item => item.id === movieData.id);
-    
-    if (!isExist) {
-      const updatedList = [movieData, ...existingData];
-      await AsyncStorage.setItem(WATCHLIST_KEY, JSON.stringify(updatedList));
-      return true;
-    }
-    return false;
+    return await addMovieToList('watchlist', movieData);
   } catch (error) {
     console.error('İzleneceklere eklenemedi:', error);
     return false;
@@ -63,8 +144,7 @@ export const saveToWatchlist = async (movieData) => {
  */
 export const getWatchlist = async () => {
   try {
-    const jsonValue = await AsyncStorage.getItem(WATCHLIST_KEY);
-    return jsonValue != null ? JSON.parse(jsonValue) : [];
+    return await readMovieList('watchlist');
   } catch (error) {
     console.error('İzlenecekler getirilemedi:', error);
     return [];
@@ -76,9 +156,8 @@ export const getWatchlist = async () => {
  */
 export const removeWatchedMovie = async (movieId) => {
   try {
-    const existingData = await getWatchedMovies();
-    const updatedList = existingData.filter(item => item.id !== movieId);
-    await AsyncStorage.setItem(WATCHED_MOVIES_KEY, JSON.stringify(updatedList));
+    const db = await getDatabase();
+    await db.runAsync(`DELETE FROM ${LIST_TABLE} WHERE list_type = ? AND movie_id = ?`, 'watched', String(movieId));
     return true;
   } catch (error) {
     console.error('Film silinemedi:', error);
@@ -88,12 +167,16 @@ export const removeWatchedMovie = async (movieId) => {
 
 export const updateWatchedMovie = async (movieId, updates) => {
   try {
-    const existingData = await getWatchedMovies();
-    if (!existingData.some(item => String(item.id) === String(movieId))) return false;
-    const updatedList = existingData.map(item =>
-      String(item.id) === String(movieId) ? { ...item, ...updates } : item
+    const db = await getDatabase();
+    const row = await db.getFirstAsync(
+      `SELECT movie_json FROM ${LIST_TABLE} WHERE list_type = ? AND movie_id = ?`, 'watched', String(movieId)
     );
-    await AsyncStorage.setItem(WATCHED_MOVIES_KEY, JSON.stringify(updatedList));
+    if (!row) return false;
+    const movie = { ...JSON.parse(row.movie_json), ...updates };
+    await db.runAsync(
+      `UPDATE ${LIST_TABLE} SET movie_json = ? WHERE list_type = ? AND movie_id = ?`,
+      JSON.stringify(movie), 'watched', String(movieId)
+    );
     return true;
   } catch (error) {
     console.error('İzlenen film güncellenemedi:', error);
@@ -129,9 +212,8 @@ export const getUserProfile = async () => {
  */
 export const removeFromWatchlist = async (movieId) => {
   try {
-    const existingData = await getWatchlist();
-    const updatedList = existingData.filter(item => item.id !== movieId);
-    await AsyncStorage.setItem(WATCHLIST_KEY, JSON.stringify(updatedList));
+    const db = await getDatabase();
+    await db.runAsync(`DELETE FROM ${LIST_TABLE} WHERE list_type = ? AND movie_id = ?`, 'watchlist', String(movieId));
     return true;
   } catch (error) {
     console.error('İzleneceklerden silinemedi:', error);
