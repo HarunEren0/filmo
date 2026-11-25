@@ -1,53 +1,67 @@
-import React, { useEffect, useState } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  Image, 
-  ScrollView, 
+import React, { useEffect, useState, useCallback, useContext } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Image,
+  ScrollView,
   ActivityIndicator,
   TouchableOpacity,
   Modal,
-  TextInput,
   FlatList,
   Linking,
-  Share
+  Share,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { 
-  getMovieDetails, 
-  getWatchProviders, 
-  getSimilarMovies, 
-  IMAGE_BASE_URL 
+import {
+  getMovieDetails,
+  getWatchProviders,
+  getSimilarMovies,
+  isApiKeyConfigured,
+  IMAGE_BASE_URL,
 } from '../services/tmdb';
-import i18n from '../services/i18n';
-import { 
-  saveWatchedMovie, 
-  saveToWatchlist, 
-  getCustomLists, 
+import {
+  saveWatchedMovie,
+  updateWatchedMovie,
+  removeWatchedMovie,
+  saveToWatchlist,
+  removeFromWatchlist,
+  getCustomLists,
   addMovieToCustomList,
-  getFavorites,
+  removeMovieFromCustomList,
   addToFavorites,
-  removeFromFavorites
+  removeFromFavorites,
+  getMovieListStatus,
 } from '../services/storage';
+import { LanguageContext } from '../context/LanguageContext';
+import { mergeWatchProviders } from '../utils/movieHelpers';
+import { COLORS, BORDER_RADIUS } from '../constants/theme';
+import ImageGalleryModal from '../components/ImageGalleryModal';
+import WatchRatingModal from '../components/WatchRatingModal';
+import i18n from '../services/i18n';
 
 export default function DetailsScreen({ route, navigation }) {
   const { movieId } = route.params;
+  const { language } = useContext(LanguageContext);
+
   const [movie, setMovie] = useState(null);
   const [cast, setCast] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
 
-  // Favori Durumu
+  // Kullanıcının liste durumları
+  const [watchedEntry, setWatchedEntry] = useState(null);
+  const [inWatchlist, setInWatchlist] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
+  const [customListIds, setCustomListIds] = useState(new Set());
 
-  // Puanlama Modal State'leri
+  // Puanlama / Düzenleme Modal State'leri
   const [modalVisible, setModalVisible] = useState(false);
   const [rating, setRating] = useState('');
   const [review, setReview] = useState('');
-  
+
   // Custom Alert State'leri
   const [alertVisible, setAlertVisible] = useState(false);
   const [alertMessage, setAlertMessage] = useState('');
@@ -56,84 +70,83 @@ export default function DetailsScreen({ route, navigation }) {
   const [listModalVisible, setListModalVisible] = useState(false);
   const [userLists, setUserLists] = useState([]);
 
-  const insets = useSafeAreaInsets();
-
-  // Fotoğraf Büyütme (Tam Ekran Galeri) State'leri
+  // Fotoğraf Galeri State'leri
   const [selectedImageIndex, setSelectedImageIndex] = useState(null);
   const [imageModalVisible, setImageModalVisible] = useState(false);
 
-  const photos = movie?.images?.backdrops || [];
-
-  const handleOpenPhoto = (index) => {
-    setSelectedImageIndex(index);
-    setImageModalVisible(true);
-  };
-
-  const handlePrevPhoto = () => {
-    if (photos.length === 0) return;
-    if (selectedImageIndex > 0) {
-      setSelectedImageIndex(selectedImageIndex - 1);
-    } else {
-      setSelectedImageIndex(photos.length - 1);
-    }
-  };
-
-  const handleNextPhoto = () => {
-    if (photos.length === 0) return;
-    if (selectedImageIndex < photos.length - 1) {
-      setSelectedImageIndex(selectedImageIndex + 1);
-    } else {
-      setSelectedImageIndex(0);
-    }
-  };
-
-  const currentPhotoPath = selectedImageIndex !== null ? (photos[selectedImageIndex]?.file_path || (selectedImageIndex === 0 ? movie?.backdrop_path : null)) : null;
-  const currentPhotoUrl = currentPhotoPath ? `https://image.tmdb.org/t/p/w1280${currentPhotoPath}` : null;
-
-  // Fragman Modal State
+  // Fragman, Yayın Platformları, Benzer Filmler
   const [trailerKey, setTrailerKey] = useState(null);
-
-  // Yayın Platformları ve Benzer Filmler State'leri
   const [watchProviders, setWatchProviders] = useState(null);
   const [similarMovies, setSimilarMovies] = useState([]);
 
+  const photos = movie?.images?.backdrops || [];
+  const rentAndBuyProviders = mergeWatchProviders(watchProviders);
+  const isInAnyList = inWatchlist || customListIds.size > 0;
+
+  const refreshListStatus = useCallback(async () => {
+    const status = await getMovieListStatus(movieId);
+    setWatchedEntry(status.watchedMovie);
+    setInWatchlist(status.inWatchlist);
+    setIsFavorite(status.isFavorite);
+    setCustomListIds(new Set(status.customListIds));
+  }, [movieId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshListStatus();
+    }, [refreshListStatus])
+  );
+
   useEffect(() => {
+    navigation.setOptions({ title: i18n.t('view_details') });
+  }, [navigation, language]);
+
+  useEffect(() => {
+    let active = true;
     const fetchDetails = async () => {
       setLoading(true);
       setLoadError(false);
-      const [data, favData, providersData, similarData] = await Promise.all([
+
+      const [data, providersData, similarData] = await Promise.all([
         getMovieDetails(movieId),
-        getFavorites(),
         getWatchProviders(movieId),
-        getSimilarMovies(movieId)
+        getSimilarMovies(movieId),
       ]);
+
+      if (!active) return;
+
       setMovie(data);
       setLoadError(!data);
-      if (data && data.credits && data.credits.cast) {
+      if (data?.credits?.cast) {
         setCast(data.credits.cast.slice(0, 10));
+      } else {
+        setCast([]);
       }
-      
-      const isFav = favData.some(m => m.id === data?.id);
-      setIsFavorite(isFav);
 
-      // Yayın platformları (Türkiye öncelikli, yoksa US/ilk mevcut)
-      const trProviders = providersData?.TR || providersData?.US || (Object.values(providersData || {})[0]);
-      setWatchProviders(trProviders || null);
+      const preferredRegion = language?.startsWith('en') ? 'US' : 'TR';
+      const selectedProviders =
+        providersData?.[preferredRegion] ||
+        providersData?.TR ||
+        providersData?.US ||
+        Object.values(providersData || {})[0];
+      setWatchProviders(selectedProviders || null);
 
-      // Benzer filmler
       setSimilarMovies(similarData || []);
 
-      // Fragman anahtarı
-      const trailer = data?.videos?.results?.find(v => v.site === 'YouTube' && v.type === 'Trailer') || data?.videos?.results?.find(v => v.site === 'YouTube');
-      if (trailer?.key) {
-        setTrailerKey(trailer.key);
-      }
+      const trailer =
+        data?.videos?.results?.find((v) => v.site === 'YouTube' && v.type === 'Trailer') ||
+        data?.videos?.results?.find((v) => v.site === 'YouTube');
+      setTrailerKey(trailer?.key || null);
 
-      setLoading(false);
+      await refreshListStatus();
+      if (active) setLoading(false);
     };
-    
+
     fetchDetails();
-  }, [movieId, retryCount]);
+    return () => {
+      active = false;
+    };
+  }, [movieId, retryCount, language, refreshListStatus]);
 
   const showCustomAlert = (message) => {
     setAlertMessage(message);
@@ -143,7 +156,23 @@ export default function DetailsScreen({ route, navigation }) {
     }, 2000);
   };
 
+  const handleOpenPhoto = (index) => {
+    setSelectedImageIndex(index);
+    setImageModalVisible(true);
+  };
+
+  const handlePrevPhoto = () => {
+    if (photos.length === 0) return;
+    setSelectedImageIndex(selectedImageIndex > 0 ? selectedImageIndex - 1 : photos.length - 1);
+  };
+
+  const handleNextPhoto = () => {
+    if (photos.length === 0) return;
+    setSelectedImageIndex(selectedImageIndex < photos.length - 1 ? selectedImageIndex + 1 : 0);
+  };
+
   const handleToggleFavorite = async () => {
+    if (!movie) return;
     if (isFavorite) {
       await removeFromFavorites(movie.id);
       setIsFavorite(false);
@@ -153,53 +182,106 @@ export default function DetailsScreen({ route, navigation }) {
     }
   };
 
+  const handleOpenWatchModal = () => {
+    if (watchedEntry) {
+      setRating(watchedEntry.userRating ?? '');
+      setReview(watchedEntry.userReview || '');
+    } else {
+      setRating('');
+      setReview('');
+    }
+    setModalVisible(true);
+  };
+
+  const handleSaveWatched = async () => {
+    if (!movie) return;
+    const numericRating = rating ? Number(rating) : null;
+    const trimmedReview = review.trim();
+
+    if (watchedEntry) {
+      const updated = await updateWatchedMovie(movie.id, {
+        userRating: numericRating,
+        userReview: trimmedReview,
+      });
+      setModalVisible(false);
+      if (updated) {
+        await refreshListStatus();
+        setTimeout(() => showCustomAlert(i18n.t('updated_watched')), 300);
+      }
+      return;
+    }
+
+    const movieDataToSave = {
+      ...movie,
+      userRating: numericRating,
+      userReview: trimmedReview,
+      watchedAt: new Date().toISOString(),
+    };
+
+    // İzledim işaretlenince Watchlist'te varsa otomatik çıkarılır
+    const success = await saveWatchedMovie(movieDataToSave, {
+      removeFromWatchlistIfPresent: true,
+    });
+    setModalVisible(false);
+    setRating('');
+    setReview('');
+
+    if (success) {
+      await refreshListStatus();
+      setTimeout(() => showCustomAlert(i18n.t('added_to_watched')), 300);
+    } else {
+      setTimeout(() => showCustomAlert(i18n.t('already_watched')), 300);
+    }
+  };
+
+  const handleRemoveWatched = async () => {
+    if (!movie) return;
+    await removeWatchedMovie(movie.id);
+    setModalVisible(false);
+    setRating('');
+    setReview('');
+    await refreshListStatus();
+    setTimeout(() => showCustomAlert(i18n.t('removed_from_watched')), 300);
+  };
+
   const handleOpenListSelector = async () => {
-    const lists = await getCustomLists();
+    const [lists] = await Promise.all([getCustomLists(), refreshListStatus()]);
     setUserLists(lists);
     setListModalVisible(true);
   };
 
-  const handleAddToSpecificList = async (listId, listName) => {
-    setListModalVisible(false);
+  const handleToggleSpecificList = async (listId, listName) => {
+    if (!movie) return;
     if (listId === 'watchlist') {
-      const success = await saveToWatchlist(movie);
-      if (!success) {
-        setTimeout(() => showCustomAlert(i18n.t('already_in_watchlist')), 500);
+      if (inWatchlist) {
+        await removeFromWatchlist(movie.id);
+        setInWatchlist(false);
+        setListModalVisible(false);
+        setTimeout(() => showCustomAlert(i18n.t('removed_from_watchlist')), 300);
       } else {
-        setTimeout(() => showCustomAlert(i18n.t('added_to_watchlist')), 500);
+        await saveToWatchlist(movie);
+        setInWatchlist(true);
+        setListModalVisible(false);
+        setTimeout(() => showCustomAlert(i18n.t('added_to_watchlist')), 300);
       }
-    } else {
-      const success = await addMovieToCustomList(listId, movie);
-      if (!success) {
-        setTimeout(() => showCustomAlert(`${i18n.t('already_in_list')}`), 500);
-      } else {
-        setTimeout(() => showCustomAlert(`"${listName}" ${i18n.t('added_to_list')}`), 500);
-      }
+      return;
     }
-  };
 
-  const handleSaveWatched = async () => {
-    const watchDate = new Date().toISOString();
-
-    const movieDataToSave = {
-      ...movie,
-      userRating: rating ? Number(rating) : null,
-      userReview: review,
-      watchedAt: watchDate
-    };
-
-    const success = await saveWatchedMovie(movieDataToSave);
-    
-    if (success) {
-      setModalVisible(false);
-      setRating('');
-      setReview('');
-      setTimeout(() => showCustomAlert(i18n.t('added_to_watched')), 500);
+    const alreadyInList = customListIds.has(listId);
+    if (alreadyInList) {
+      await removeMovieFromCustomList(listId, movie.id);
+      setCustomListIds((prev) => {
+        const next = new Set(prev);
+        next.delete(listId);
+        return next;
+      });
+      setListModalVisible(false);
+      setTimeout(() => showCustomAlert(`"${listName}" ${i18n.t('removed_from_list')}`), 300);
     } else {
-      setModalVisible(false);
-      setTimeout(() => {
-        showCustomAlert(i18n.t('already_watched'));
-      }, 500);
+      await addMovieToCustomList(listId, movie);
+      setCustomListIds((prev) => new Set([...prev, listId]));
+      setListModalVisible(false);
+      setTimeout(() => showCustomAlert(`"${listName}" ${i18n.t('added_to_list')}`), 300);
     }
   };
 
@@ -208,7 +290,7 @@ export default function DetailsScreen({ route, navigation }) {
     try {
       const year = movie.release_date?.split('-')[0] || '';
       const score = movie.vote_average ? `⭐ ${movie.vote_average.toFixed(1)}/10` : '';
-      const message = `🎬 Filmo'da bu filmi buldum:\n\n*${movie.title}* (${year}) ${score}\n\nDetaylar: https://www.themoviedb.org/movie/${movie.id}`;
+      const message = `🎬 ${i18n.t('share_intro')}\n\n*${movie.title}* (${year}) ${score}\n\n${i18n.t('share_details')}: https://www.themoviedb.org/movie/${movie.id}`;
       await Share.share({
         message,
         title: movie.title,
@@ -219,7 +301,11 @@ export default function DetailsScreen({ route, navigation }) {
   };
 
   const handleWatchTrailer = async () => {
-    const key = trailerKey || movie?.videos?.results?.find(v => v.site === 'YouTube' && v.type === 'Trailer')?.key || movie?.videos?.results?.find(v => v.site === 'YouTube')?.key;
+    const key =
+      trailerKey ||
+      movie?.videos?.results?.find((v) => v.site === 'YouTube' && v.type === 'Trailer')?.key ||
+      movie?.videos?.results?.find((v) => v.site === 'YouTube')?.key;
+
     if (key) {
       try {
         await Linking.openURL(`https://www.youtube.com/watch?v=${encodeURIComponent(key)}`);
@@ -233,69 +319,90 @@ export default function DetailsScreen({ route, navigation }) {
   };
 
   const renderCastItem = ({ item }) => (
-    <TouchableOpacity 
+    <TouchableOpacity
       style={styles.castItem}
-      onPress={() => navigation.navigate('Actor', { actorId: item.id, actorName: item.name, actorPhoto: item.profile_path })}
+      onPress={() =>
+        navigation.navigate('Actor', {
+          actorId: item.id,
+          actorName: item.name,
+          actorPhoto: item.profile_path,
+        })
+      }
     >
       {item.profile_path ? (
         <Image source={{ uri: `${IMAGE_BASE_URL}${item.profile_path}` }} style={styles.castImage} />
       ) : (
-        <View style={styles.noCastImage}><Text style={styles.noCastText}>{i18n.t('none')}</Text></View>
+        <View style={styles.noCastImage}>
+          <Text style={styles.noCastText}>{i18n.t('none')}</Text>
+        </View>
       )}
-      <Text style={styles.castName} numberOfLines={2}>{item.name}</Text>
-      <Text style={styles.castCharacter} numberOfLines={2}>{item.character}</Text>
+      <Text style={styles.castName} numberOfLines={2}>
+        {item.name}
+      </Text>
+      <Text style={styles.castCharacter} numberOfLines={2}>
+        {item.character}
+      </Text>
     </TouchableOpacity>
   );
 
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#ff9800" />
+        <ActivityIndicator size="large" color={COLORS.primary} />
       </View>
     );
   }
 
   if (loadError || !movie) {
+    const missingKey = !isApiKeyConfigured();
     return (
       <View style={styles.centered}>
-        <Ionicons name="cloud-offline-outline" size={42} color="#888" />
-        <Text style={styles.loadErrorText}>{i18n.t('load_error')}</Text>
-        <TouchableOpacity style={styles.retryButton} onPress={() => setRetryCount(value => value + 1)}>
-          <Ionicons name="refresh" size={18} color="#121212" />
+        <Ionicons
+          name={missingKey ? 'key-outline' : 'cloud-offline-outline'}
+          size={42}
+          color={COLORS.textMuted}
+        />
+        <Text style={styles.loadErrorText}>
+          {missingKey ? i18n.t('missing_api_key') : i18n.t('load_error')}
+        </Text>
+        <TouchableOpacity style={styles.retryButton} onPress={() => setRetryCount((v) => v + 1)}>
+          <Ionicons name="refresh" size={18} color={COLORS.textDark} />
           <Text style={styles.retryButtonText}>{i18n.t('retry')}</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
-  // Yaş Sınırı
-  const trRelease = movie.release_dates?.results?.find(r => r.iso_3166_1 === 'TR');
-  const usRelease = movie.release_dates?.results?.find(r => r.iso_3166_1 === 'US');
-  let certification = trRelease?.release_dates?.[0]?.certification || usRelease?.release_dates?.[0]?.certification || 'NR';
+  const trRelease = movie.release_dates?.results?.find((r) => r.iso_3166_1 === 'TR');
+  const usRelease = movie.release_dates?.results?.find((r) => r.iso_3166_1 === 'US');
+  let certification =
+    trRelease?.release_dates?.[0]?.certification ||
+    usRelease?.release_dates?.[0]?.certification ||
+    'NR';
   if (certification === '') certification = 'NR';
 
-  // Yönetmen ve Yazar
-  const director = movie.credits?.crew?.find(c => c.job === 'Director')?.name;
-  const writer = movie.credits?.crew?.find(c => c.job === 'Screenplay' || c.job === 'Writer')?.name;
+  const director = movie.credits?.crew?.find((c) => c.job === 'Director')?.name;
+  const writer = movie.credits?.crew?.find(
+    (c) => c.job === 'Screenplay' || c.job === 'Writer'
+  )?.name;
 
   return (
     <View style={styles.mainContainer}>
       <View style={styles.headerCover}>
-        <TouchableOpacity 
+        <TouchableOpacity
           activeOpacity={0.9}
           style={{ width: '100%', height: '100%' }}
           onPress={() => {
             if (photos.length > 0) {
               handleOpenPhoto(0);
             } else if (movie.backdrop_path) {
-              setSelectedImageIndex(0);
-              setImageModalVisible(true);
+              handleOpenPhoto(0);
             }
           }}
         >
           {movie.backdrop_path ? (
-            <Image 
-              source={{ uri: `${IMAGE_BASE_URL}${movie.backdrop_path}` }} 
+            <Image
+              source={{ uri: `${IMAGE_BASE_URL}${movie.backdrop_path}` }}
               style={styles.backdrop}
             />
           ) : (
@@ -305,45 +412,75 @@ export default function DetailsScreen({ route, navigation }) {
         <View style={styles.headerGradient} />
       </View>
 
-      <ScrollView 
-        style={styles.container} 
+      <ScrollView
+        style={styles.container}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingTop: 200 }}
       >
         <View style={styles.content}>
-          
-          {/* Başlık, Paylaş ve Kalp (Favori) İkonları */}
+          {/* Başlık, Paylaş ve Favori */}
           <View style={styles.titleRow}>
             <Text style={styles.title}>{movie.title}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <TouchableOpacity onPress={handleShareMovie} style={[styles.favoriteButton, { marginRight: 8 }]}>
-                <Ionicons name="share-social-outline" size={24} color="#ffffff" />
+                <Ionicons name="share-social-outline" size={24} color={COLORS.text} />
               </TouchableOpacity>
               <TouchableOpacity onPress={handleToggleFavorite} style={styles.favoriteButton}>
-                <Ionicons name={isFavorite ? "heart" : "heart-outline"} size={26} color={isFavorite ? "#ff4444" : "#ffffff"} />
+                <Ionicons
+                  name={isFavorite ? 'heart' : 'heart-outline'}
+                  size={26}
+                  color={isFavorite ? COLORS.danger : COLORS.text}
+                />
               </TouchableOpacity>
             </View>
           </View>
-          
+
           <View style={styles.metaData}>
-            <Text style={styles.metaText}>{movie.release_date?.split('-')[0]}</Text>
-            <Text style={styles.dot}>•</Text>
-            <Text style={styles.metaText}>{movie.runtime} dk</Text>
+            <Text style={styles.metaText}>{movie.release_date?.split('-')[0] || i18n.t('no_date')}</Text>
+            {movie.runtime ? (
+              <>
+                <Text style={styles.dot}>•</Text>
+                <Text style={styles.metaText}>
+                  {movie.runtime} {i18n.t('minutes_short')}
+                </Text>
+              </>
+            ) : null}
             <Text style={styles.dot}>•</Text>
             <Text style={styles.rating}>⭐ {movie.vote_average?.toFixed(1)}</Text>
             <Text style={styles.dot}>•</Text>
-            <View style={styles.certBadge}><Text style={styles.certText}>{certification}</Text></View>
+            <View style={styles.certBadge}>
+              <Text style={styles.certText}>{certification}</Text>
+            </View>
           </View>
+
+          {watchedEntry?.userRating ? (
+            <View style={styles.userRatingBanner}>
+              <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+              <Text style={styles.userRatingBannerText}>
+                {i18n.t('watched_done')} • {i18n.t('your_rating')}: ⭐ {watchedEntry.userRating}/10
+              </Text>
+            </View>
+          ) : null}
 
           {(director || writer) && (
             <View style={styles.crewContainer}>
-              {director && <Text style={styles.crewText}><Text style={styles.crewLabel}>{i18n.t('director')}</Text>{director}</Text>}
-              {writer && <Text style={styles.crewText}><Text style={styles.crewLabel}>{i18n.t('writer')}</Text>{writer}</Text>}
+              {director && (
+                <Text style={styles.crewText}>
+                  <Text style={styles.crewLabel}>{i18n.t('director')}</Text>
+                  {director}
+                </Text>
+              )}
+              {writer && (
+                <Text style={styles.crewText}>
+                  <Text style={styles.crewLabel}>{i18n.t('writer')}</Text>
+                  {writer}
+                </Text>
+              )}
             </View>
           )}
 
           <View style={styles.genres}>
-            {movie.genres?.map(genre => (
+            {movie.genres?.map((genre) => (
               <View key={genre.id} style={styles.genreBadge}>
                 <Text style={styles.genreText}>{genre.name}</Text>
               </View>
@@ -352,29 +489,42 @@ export default function DetailsScreen({ route, navigation }) {
 
           {/* Aksiyon Butonları */}
           <View style={styles.actionButtons}>
-            <TouchableOpacity 
-              style={[styles.button, styles.watchButton]} 
-              onPress={() => setModalVisible(true)}
+            <TouchableOpacity
+              style={[styles.button, watchedEntry ? styles.watchedDoneButton : styles.watchButton]}
+              onPress={handleOpenWatchModal}
             >
-              <Text style={styles.buttonText}>{i18n.t('watched')}</Text>
+              <View style={styles.watchButtonContent}>
+                <Ionicons
+                  name={watchedEntry ? 'checkmark-circle' : 'eye-outline'}
+                  size={19}
+                  color={watchedEntry ? COLORS.success : COLORS.textDark}
+                />
+                <Text style={[styles.buttonText, watchedEntry && styles.watchedDoneButtonText]}>
+                  {watchedEntry ? i18n.t('watched_done') : i18n.t('watched')}
+                </Text>
+              </View>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={[styles.button, styles.watchlistButton]} 
+            <TouchableOpacity
+              style={[styles.button, styles.watchlistButton, isInAnyList && styles.watchlistButtonActive]}
               onPress={handleOpenListSelector}
             >
-              <Text style={styles.watchlistButtonText}>{i18n.t('add_to_list')}</Text>
+              <View style={styles.watchButtonContent}>
+                {isInAnyList ? (
+                  <Ionicons name="bookmark" size={17} color={COLORS.primary} />
+                ) : null}
+                <Text style={styles.watchlistButtonText}>
+                  {isInAnyList ? i18n.t('in_lists') : i18n.t('add_to_list')}
+                </Text>
+              </View>
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity 
-            style={styles.trailerButton}
-            onPress={handleWatchTrailer}
-          >
-            <Ionicons name="play" size={20} color="#121212" style={{marginRight: 8}} />
+          <TouchableOpacity style={styles.trailerButton} onPress={handleWatchTrailer}>
+            <Ionicons name="play" size={20} color={COLORS.textDark} style={{ marginRight: 8 }} />
             <Text style={styles.trailerButtonText}>{i18n.t('watch_trailer')}</Text>
           </TouchableOpacity>
-          
+
           <Text style={styles.sectionTitle}>{i18n.t('overview')}</Text>
           <Text style={styles.overview}>{movie.overview || i18n.t('no_overview')}</Text>
 
@@ -385,7 +535,7 @@ export default function DetailsScreen({ route, navigation }) {
               <FlatList
                 horizontal
                 data={cast}
-                keyExtractor={(item) => item.id.toString()}
+                keyExtractor={(item) => String(item.id)}
                 renderItem={renderCastItem}
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.castList}
@@ -394,19 +544,19 @@ export default function DetailsScreen({ route, navigation }) {
           )}
 
           {/* Fotoğraflar */}
-          {movie.images?.backdrops?.length > 0 && (
+          {photos.length > 0 && (
             <>
               <Text style={[styles.sectionTitle, { marginTop: 24 }]}>{i18n.t('photos')}</Text>
               <FlatList
                 horizontal
-                data={movie.images.backdrops.slice(0, 20)}
+                data={photos.slice(0, 20)}
                 keyExtractor={(item, index) => item.file_path + index}
                 renderItem={({ item, index }) => (
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    onPress={() => handleOpenPhoto(index)}
-                  >
-                    <Image source={{ uri: `${IMAGE_BASE_URL}${item.file_path}` }} style={styles.backdropGalleryImage} />
+                  <TouchableOpacity activeOpacity={0.8} onPress={() => handleOpenPhoto(index)}>
+                    <Image
+                      source={{ uri: `${IMAGE_BASE_URL}${item.file_path}` }}
+                      style={styles.backdropGalleryImage}
+                    />
                   </TouchableOpacity>
                 )}
                 showsHorizontalScrollIndicator={false}
@@ -415,73 +565,90 @@ export default function DetailsScreen({ route, navigation }) {
             </>
           )}
 
-          {/* Nerede İzlenir? (Yayın Platformları) */}
-          {watchProviders && (watchProviders.flatrate?.length > 0 || watchProviders.rent?.length > 0 || watchProviders.buy?.length > 0) && (
-            <View style={styles.providersContainer}>
-              <Text style={[styles.sectionTitle, { marginTop: 24 }]}>{i18n.t('watch_providers')}</Text>
-              
-              {/* Abonelik (Stream) */}
-              {watchProviders.flatrate?.length > 0 && (
-                <View style={styles.providerCategory}>
-                  <Text style={styles.providerCategoryTitle}>{i18n.t('stream')}</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.providersList}>
-                    {watchProviders.flatrate.map(provider => (
-                      <View key={provider.provider_id} style={styles.providerItem}>
-                        <Image 
-                          source={{ uri: `https://image.tmdb.org/t/p/w92${provider.logo_path}` }} 
-                          style={styles.providerLogo} 
-                        />
-                        <Text style={styles.providerName} numberOfLines={1}>{provider.provider_name}</Text>
-                      </View>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
+          {/* Nerede İzlenir? */}
+          {watchProviders &&
+            (watchProviders.flatrate?.length > 0 || rentAndBuyProviders.length > 0) && (
+              <View style={styles.providersContainer}>
+                <Text style={[styles.sectionTitle, { marginTop: 24 }]}>
+                  {i18n.t('watch_providers')}
+                </Text>
 
-              {/* Kirala / Satın Al (Rent / Buy) */}
-              {(watchProviders.rent?.length > 0 || watchProviders.buy?.length > 0) && (
-                <View style={styles.providerCategory}>
-                  <Text style={styles.providerCategoryTitle}>{i18n.t('rent_buy')}</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.providersList}>
-                    {(watchProviders.rent || watchProviders.buy || []).slice(0, 10).map((provider, idx) => (
-                      <View key={provider.provider_id + '-' + idx} style={styles.providerItem}>
-                        <Image 
-                          source={{ uri: `https://image.tmdb.org/t/p/w92${provider.logo_path}` }} 
-                          style={styles.providerLogo} 
-                        />
-                        <Text style={styles.providerName} numberOfLines={1}>{provider.provider_name}</Text>
-                      </View>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-            </View>
-          )}
+                {watchProviders.flatrate?.length > 0 && (
+                  <View style={styles.providerCategory}>
+                    <Text style={styles.providerCategoryTitle}>{i18n.t('stream')}</Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.providersList}
+                    >
+                      {watchProviders.flatrate.map((provider) => (
+                        <View key={provider.provider_id} style={styles.providerItem}>
+                          <Image
+                            source={{ uri: `https://image.tmdb.org/t/p/w92${provider.logo_path}` }}
+                            style={styles.providerLogo}
+                          />
+                          <Text style={styles.providerName} numberOfLines={1}>
+                            {provider.provider_name}
+                          </Text>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+
+                {rentAndBuyProviders.length > 0 && (
+                  <View style={styles.providerCategory}>
+                    <Text style={styles.providerCategoryTitle}>{i18n.t('rent_buy')}</Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.providersList}
+                    >
+                      {rentAndBuyProviders.slice(0, 12).map((provider) => (
+                        <View key={provider.provider_id} style={styles.providerItem}>
+                          <Image
+                            source={{ uri: `https://image.tmdb.org/t/p/w92${provider.logo_path}` }}
+                            style={styles.providerLogo}
+                          />
+                          <Text style={styles.providerName} numberOfLines={1}>
+                            {provider.provider_name}
+                          </Text>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+            )}
 
           {/* Benzer Filmler */}
           {similarMovies.length > 0 && (
             <>
-              <Text style={[styles.sectionTitle, { marginTop: 24 }]}>{i18n.t('similar_movies')}</Text>
+              <Text style={[styles.sectionTitle, { marginTop: 24 }]}>
+                {i18n.t('similar_movies')}
+              </Text>
               <FlatList
                 horizontal
                 data={similarMovies.slice(0, 15)}
-                keyExtractor={(item) => item.id.toString()}
+                keyExtractor={(item) => String(item.id)}
                 renderItem={({ item }) => (
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.similarPosterContainer}
                     onPress={() => navigation.push('Details', { movieId: item.id })}
                   >
                     {item.poster_path ? (
-                      <Image 
-                        source={{ uri: `${IMAGE_BASE_URL}${item.poster_path}` }} 
+                      <Image
+                        source={{ uri: `${IMAGE_BASE_URL}${item.poster_path}` }}
                         style={styles.similarPoster}
                       />
                     ) : (
                       <View style={styles.noSimilarPoster}>
-                        <Text style={styles.noPosterText}>{i18n.t('none')}</Text>
+                        <Text style={styles.noCastText}>{i18n.t('none')}</Text>
                       </View>
                     )}
-                    <Text style={styles.similarMovieTitle} numberOfLines={1}>{item.title}</Text>
+                    <Text style={styles.similarMovieTitle} numberOfLines={1}>
+                      {item.title}
+                    </Text>
                     {item.vote_average ? (
                       <Text style={styles.similarMovieRating}>⭐ {item.vote_average.toFixed(1)}</Text>
                     ) : null}
@@ -492,177 +659,107 @@ export default function DetailsScreen({ route, navigation }) {
               />
             </>
           )}
-          
-          <View style={{height: 40}} />
+
+          <View style={{ height: 40 }} />
         </View>
       </ScrollView>
 
-      {/* Puanlama ve Yorum Modal'ı */}
-      <Modal
-        animationType="slide"
-        transparent={true}
+      <WatchRatingModal
         visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalView}>
-            <Text style={styles.modalTitle}>{i18n.t('rate_movie')}</Text>
-            
-            <Text style={styles.label}>{i18n.t('rating_label')}</Text>
-            <View style={styles.ratingGrid}>
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(num => (
-                <TouchableOpacity
-                  key={num}
-                  style={[styles.ratingButton, rating === num && styles.ratingButtonActive]}
-                  onPress={() => setRating(rating === num ? '' : num)}
-                >
-                  <Text style={[styles.ratingButtonText, rating === num && styles.ratingButtonTextActive]}>{num}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+        isEditing={Boolean(watchedEntry)}
+        rating={rating}
+        review={review}
+        onChangeRating={setRating}
+        onChangeReview={setReview}
+        onSave={handleSaveWatched}
+        onRemove={handleRemoveWatched}
+        onClose={() => setModalVisible(false)}
+      />
 
-            <Text style={styles.label}>{i18n.t('review_label')}</Text>
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              multiline
-              numberOfLines={4}
-              placeholder={i18n.t('review_placeholder')}
-              placeholderTextColor="#888"
-              value={review}
-              onChangeText={setReview}
-            />
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity style={[styles.mButton, styles.mCancelButton]} onPress={() => setModalVisible(false)}>
-                <Text style={styles.mButtonText}>{i18n.t('cancel')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.mButton, styles.mSaveButton]} onPress={handleSaveWatched}>
-                <Text style={styles.mButtonText}>{i18n.t('save')}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Liste Seçme Modal'ı */}
+      {/* Liste Seçme / Yönetme Modalı */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent
         visible={listModalVisible}
         onRequestClose={() => setListModalVisible(false)}
       >
-        <TouchableOpacity style={styles.listSelectorOverlay} activeOpacity={1} onPress={() => setListModalVisible(false)}>
+        <TouchableOpacity
+          style={styles.listSelectorOverlay}
+          activeOpacity={1}
+          onPress={() => setListModalVisible(false)}
+        >
           <View style={styles.listSelectorSheet} onStartShouldSetResponder={() => true}>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>{i18n.t('which_list')}</Text>
             </View>
-            
+
             <ScrollView style={styles.sheetScroll}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.sheetItem}
-                onPress={() => handleAddToSpecificList('watchlist', i18n.t('watchlist'))}
+                onPress={() => handleToggleSpecificList('watchlist', i18n.t('watchlist'))}
               >
-                <Ionicons name="bookmark" size={24} color="#ff9800" style={styles.sheetIcon} />
+                <Ionicons
+                  name={inWatchlist ? 'bookmark' : 'bookmark-outline'}
+                  size={24}
+                  color={COLORS.primary}
+                  style={styles.sheetIcon}
+                />
                 <Text style={styles.sheetItemText}>{i18n.t('watchlist')}</Text>
+                {inWatchlist ? (
+                  <Ionicons name="checkmark-circle" size={22} color={COLORS.success} />
+                ) : null}
               </TouchableOpacity>
 
-              {userLists.map(list => (
-                <TouchableOpacity 
-                  key={list.id}
-                  style={styles.sheetItem}
-                  onPress={() => handleAddToSpecificList(list.id, list.name)}
-                >
-                  <Ionicons name="list" size={24} color="#ff9800" style={styles.sheetIcon} />
-                  <Text style={styles.sheetItemText}>{list.name}</Text>
-                </TouchableOpacity>
-              ))}
+              {userLists.map((list) => {
+                const included = customListIds.has(list.id);
+                return (
+                  <TouchableOpacity
+                    key={list.id}
+                    style={styles.sheetItem}
+                    onPress={() => handleToggleSpecificList(list.id, list.name)}
+                  >
+                    <Ionicons
+                      name={included ? 'list-circle' : 'list'}
+                      size={24}
+                      color={COLORS.primary}
+                      style={styles.sheetIcon}
+                    />
+                    <Text style={styles.sheetItemText}>{list.name}</Text>
+                    {included ? (
+                      <Ionicons name="checkmark-circle" size={22} color={COLORS.success} />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
 
-      {/* Özel Uyarı Modalı (Custom Alert) */}
+      {/* Bildirim Toast Modalı */}
       <Modal
         animationType="fade"
-        transparent={true}
+        transparent
         visible={alertVisible}
         onRequestClose={() => setAlertVisible(false)}
       >
         <View style={styles.customAlertOverlay}>
           <View style={styles.customAlertBox}>
-            <Ionicons name="information-circle" size={40} color="#ff9800" style={{marginBottom: 10}} />
+            <Ionicons name="information-circle" size={40} color={COLORS.primary} style={{ marginBottom: 10 }} />
             <Text style={styles.customAlertText}>{alertMessage}</Text>
           </View>
         </View>
       </Modal>
 
-      {/* Tam Ekran Fotoğraf Büyütme Modalı */}
-      <Modal
-        animationType="fade"
-        transparent={true}
+      <ImageGalleryModal
         visible={imageModalVisible}
-        onRequestClose={() => setImageModalVisible(false)}
-        statusBarTranslucent={true}
-      >
-        <View style={styles.imageViewerOverlay}>
-          {/* Üst Bar: Kapatma Butonu ve Fotoğraf Sayacı */}
-          <View style={[styles.imageViewerHeader, { paddingTop: Math.max(insets.top, 25) }]}>
-            <View style={styles.counterBadge}>
-              <Text style={styles.imageViewerCounter}>
-                {photos.length > 0 ? `${selectedImageIndex + 1} / ${photos.length}` : '1 / 1'}
-              </Text>
-            </View>
-            <TouchableOpacity 
-              style={styles.imageViewerCloseBtn}
-              onPress={() => setImageModalVisible(false)}
-              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
-            >
-              <Ionicons name="close" size={26} color="#ffffff" />
-            </TouchableOpacity>
-          </View>
-
-          {/* Görsel Alanı */}
-          <TouchableOpacity 
-            activeOpacity={1} 
-            style={styles.imageViewerContent}
-            onPress={() => setImageModalVisible(false)}
-          >
-            {currentPhotoUrl && (
-              <Image
-                source={{ uri: currentPhotoUrl }}
-                style={styles.fullscreenImage}
-                resizeMode="contain"
-              />
-            )}
-          </TouchableOpacity>
-
-          {/* Sol Ok (Önceki Fotoğraf) */}
-          {photos.length > 1 && (
-            <TouchableOpacity 
-              style={[styles.arrowButton, styles.leftArrow]}
-              onPress={handlePrevPhoto}
-              activeOpacity={0.7}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="chevron-back" size={28} color="#ffffff" />
-            </TouchableOpacity>
-          )}
-
-          {/* Sağ Ok (Sonraki Fotoğraf) */}
-          {photos.length > 1 && (
-            <TouchableOpacity 
-              style={[styles.arrowButton, styles.rightArrow]}
-              onPress={handleNextPhoto}
-              activeOpacity={0.7}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="chevron-forward" size={28} color="#ffffff" />
-            </TouchableOpacity>
-          )}
-        </View>
-      </Modal>
-
-      {/* Uygulama İçi Fragman Modalı */}
+        photos={photos}
+        fallbackBackdropPath={movie.backdrop_path}
+        selectedIndex={selectedImageIndex}
+        onPrev={handlePrevPhoto}
+        onNext={handleNextPhoto}
+        onClose={() => setImageModalVisible(false)}
+      />
     </View>
   );
 }
@@ -670,7 +767,7 @@ export default function DetailsScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   mainContainer: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: COLORS.background,
   },
   headerCover: {
     position: 'absolute',
@@ -687,7 +784,7 @@ const styles = StyleSheet.create({
   noBackdrop: {
     width: '100%',
     height: '100%',
-    backgroundColor: '#1e1e1e',
+    backgroundColor: COLORS.surface,
   },
   headerGradient: {
     position: 'absolute',
@@ -695,7 +792,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 50,
-    backgroundColor: '#121212',
+    backgroundColor: COLORS.background,
     opacity: 0.8,
   },
   container: {
@@ -704,20 +801,39 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 20,
-    backgroundColor: '#121212',
+    backgroundColor: COLORS.background,
     minHeight: '100%',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: BORDER_RADIUS.xxl,
+    borderTopRightRadius: BORDER_RADIUS.xxl,
   },
   centered: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: COLORS.background,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  loadErrorText: { color: '#bbb', fontSize: 16, textAlign: 'center', lineHeight: 23, marginTop: 14, marginBottom: 20, paddingHorizontal: 28 },
-  retryButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ff9800', borderRadius: 22, paddingHorizontal: 20, paddingVertical: 11 },
-  retryButtonText: { color: '#121212', fontWeight: 'bold', marginLeft: 7 },
+  loadErrorText: {
+    color: '#bbb',
+    fontSize: 16,
+    textAlign: 'center',
+    lineHeight: 23,
+    marginTop: 14,
+    marginBottom: 20,
+    paddingHorizontal: 28,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primary,
+    borderRadius: 22,
+    paddingHorizontal: 20,
+    paddingVertical: 11,
+  },
+  retryButtonText: {
+    color: COLORS.textDark,
+    fontWeight: 'bold',
+    marginLeft: 7,
+  },
   titleRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -725,7 +841,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   title: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 26,
     fontWeight: 'bold',
     flex: 1,
@@ -737,47 +853,65 @@ const styles = StyleSheet.create({
   metaData: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
     marginBottom: 12,
   },
   metaText: {
-    color: '#aaaaaa',
+    color: COLORS.textSecondary,
     fontSize: 14,
   },
   dot: {
-    color: '#aaaaaa',
+    color: COLORS.textSecondary,
     marginHorizontal: 8,
     fontSize: 14,
   },
   rating: {
-    color: '#ff9800',
+    color: COLORS.primary,
     fontSize: 14,
     fontWeight: 'bold',
   },
   certBadge: {
     borderWidth: 1,
-    borderColor: '#888',
-    borderRadius: 4,
+    borderColor: COLORS.textMuted,
+    borderRadius: BORDER_RADIUS.sm,
     paddingHorizontal: 4,
     paddingVertical: 2,
   },
   certText: {
-    color: '#888',
+    color: COLORS.textMuted,
     fontSize: 10,
     fontWeight: 'bold',
   },
+  userRatingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(76, 175, 80, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(76, 175, 80, 0.35)',
+    borderRadius: BORDER_RADIUS.md,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 12,
+  },
+  userRatingBannerText: {
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
   crewContainer: {
     marginBottom: 16,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: COLORS.surface,
     padding: 10,
-    borderRadius: 8,
+    borderRadius: BORDER_RADIUS.md,
   },
   crewText: {
-    color: '#fff',
+    color: COLORS.text,
     fontSize: 14,
     marginBottom: 4,
   },
   crewLabel: {
-    color: '#888',
+    color: COLORS.textMuted,
     fontWeight: 'bold',
   },
   genres: {
@@ -786,10 +920,10 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   genreBadge: {
-    backgroundColor: '#2c2c2c',
+    backgroundColor: COLORS.surfaceLight,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 16,
+    borderRadius: BORDER_RADIUS.xl,
     marginRight: 8,
     marginBottom: 8,
   },
@@ -805,45 +939,62 @@ const styles = StyleSheet.create({
   button: {
     flex: 1,
     paddingVertical: 14,
-    borderRadius: 8,
+    borderRadius: BORDER_RADIUS.md,
     alignItems: 'center',
   },
   watchButton: {
-    backgroundColor: '#ff9800',
+    backgroundColor: COLORS.primary,
     marginRight: 8,
+  },
+  watchedDoneButton: {
+    backgroundColor: 'rgba(76, 175, 80, 0.15)',
+    borderWidth: 1,
+    borderColor: COLORS.success,
+    marginRight: 8,
+  },
+  watchButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
   },
   watchlistButton: {
     backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: '#ff9800',
+    borderColor: COLORS.primary,
     marginLeft: 8,
   },
+  watchlistButtonActive: {
+    backgroundColor: COLORS.primaryLight,
+  },
   buttonText: {
-    color: '#121212',
+    color: COLORS.textDark,
     fontSize: 16,
     fontWeight: 'bold',
   },
+  watchedDoneButtonText: {
+    color: COLORS.success,
+  },
   watchlistButtonText: {
-    color: '#ff9800',
+    color: COLORS.primary,
     fontSize: 15,
     fontWeight: 'bold',
   },
   trailerButton: {
-    backgroundColor: '#fff',
+    backgroundColor: COLORS.text,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: BORDER_RADIUS.md,
     marginBottom: 24,
   },
   trailerButtonText: {
-    color: '#121212',
+    color: COLORS.textDark,
     fontSize: 16,
     fontWeight: 'bold',
   },
   sectionTitle: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 12,
@@ -863,149 +1014,57 @@ const styles = StyleSheet.create({
   castImage: {
     width: 90,
     height: 135,
-    borderRadius: 8,
+    borderRadius: BORDER_RADIUS.md,
     marginBottom: 8,
   },
   backdropGalleryImage: {
     width: 240,
     height: 135,
-    borderRadius: 8,
+    borderRadius: BORDER_RADIUS.md,
     marginRight: 15,
   },
   noCastImage: {
     width: 90,
     height: 135,
-    borderRadius: 8,
+    borderRadius: BORDER_RADIUS.md,
     marginBottom: 8,
-    backgroundColor: '#2c2c2c',
+    backgroundColor: COLORS.surfaceLight,
     justifyContent: 'center',
     alignItems: 'center',
   },
   noCastText: {
-    color: '#888',
+    color: COLORS.textMuted,
   },
   castName: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 13,
     fontWeight: 'bold',
     marginBottom: 2,
   },
   castCharacter: {
-    color: '#aaaaaa',
+    color: COLORS.textSecondary,
     fontSize: 12,
   },
-  errorText: {
-    color: '#ff4444',
-    fontSize: 16,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  modalView: {
-    backgroundColor: '#1e1e1e',
-    borderRadius: 16,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#2c2c2c',
-  },
-  modalTitle: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  label: {
-    color: '#aaaaaa',
-    marginBottom: 8,
-    fontSize: 14,
-  },
-  input: {
-    backgroundColor: '#2c2c2c',
-    color: '#ffffff',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    fontSize: 16,
-  },
-  ratingGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: 4, // Yorum ile aradaki boşluk azaltıldı
-  },
-  ratingButton: {
-    width: '18%',
-    aspectRatio: 1,
-    backgroundColor: '#2c2c2c',
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  ratingButtonActive: {
-    backgroundColor: '#ff9800',
-  },
-  ratingButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  ratingButtonTextActive: {
-    color: '#121212',
-  },
-  textArea: {
-    height: 100,
-    textAlignVertical: 'top',
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 10,
-  },
-  mButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  mCancelButton: {
-    backgroundColor: '#333333',
-    marginRight: 8,
-  },
-  mSaveButton: {
-    backgroundColor: '#ff9800',
-    marginLeft: 8,
-  },
-  mButtonText: {
-    color: '#ffffff',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  // Liste Seçim Modalı Stilleri
   listSelectorOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
   listSelectorSheet: {
-    backgroundColor: '#1e1e1e',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: COLORS.surface,
+    borderTopLeftRadius: BORDER_RADIUS.xxl,
+    borderTopRightRadius: BORDER_RADIUS.xxl,
     padding: 20,
     maxHeight: '60%',
   },
   sheetHeader: {
     borderBottomWidth: 1,
-    borderBottomColor: '#2c2c2c',
+    borderBottomColor: COLORS.border,
     paddingBottom: 15,
     marginBottom: 10,
   },
   sheetTitle: {
-    color: '#fff',
+    color: COLORS.text,
     fontSize: 18,
     fontWeight: 'bold',
     textAlign: 'center',
@@ -1018,14 +1077,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 15,
     borderBottomWidth: 1,
-    borderBottomColor: '#2c2c2c',
+    borderBottomColor: COLORS.border,
   },
   sheetIcon: {
     marginRight: 15,
   },
   sheetItemText: {
-    color: '#fff',
+    color: COLORS.text,
     fontSize: 16,
+    flex: 1,
   },
   customAlertOverlay: {
     flex: 1,
@@ -1034,92 +1094,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   customAlertBox: {
-    backgroundColor: '#2c2c2c',
+    backgroundColor: COLORS.surfaceLight,
     padding: 20,
-    borderRadius: 16,
+    borderRadius: BORDER_RADIUS.xl,
     alignItems: 'center',
-    width: 250,
+    width: 260,
     borderWidth: 1,
-    borderColor: '#3d3d3d',
+    borderColor: COLORS.borderLight,
   },
   customAlertText: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 16,
     textAlign: 'center',
     fontWeight: 'bold',
   },
-  // Tam Ekran Fotoğraf Görüntüleyici Stilleri
-  imageViewerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.95)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  imageViewerHeader: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 15,
-    zIndex: 20,
-  },
-  counterBadge: {
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-  },
-  imageViewerCounter: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: 'bold',
-    letterSpacing: 1,
-  },
-  imageViewerCloseBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 22,
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  imageViewerContent: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fullscreenImage: {
-    width: '100%',
-    height: '80%',
-  },
-  arrowButton: {
-    position: 'absolute',
-    top: '50%',
-    marginTop: -25,
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 15,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  leftArrow: {
-    left: 15,
-  },
-  rightArrow: {
-    right: 15,
-  },
-  // Yayın Platformları (Watch Providers) Stilleri
   providersContainer: {
     marginTop: 4,
   },
@@ -1127,7 +1115,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   providerCategoryTitle: {
-    color: '#aaaaaa',
+    color: COLORS.textSecondary,
     fontSize: 13,
     fontWeight: 'bold',
     textTransform: 'uppercase',
@@ -1145,17 +1133,16 @@ const styles = StyleSheet.create({
   providerLogo: {
     width: 50,
     height: 50,
-    borderRadius: 12,
+    borderRadius: BORDER_RADIUS.lg,
     marginBottom: 6,
-    backgroundColor: '#2c2c2c',
+    backgroundColor: COLORS.surfaceLight,
   },
   providerName: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 11,
     textAlign: 'center',
     width: 65,
   },
-  // Benzer Filmler Stilleri
   similarPosterContainer: {
     width: 110,
     marginRight: 12,
@@ -1163,26 +1150,26 @@ const styles = StyleSheet.create({
   similarPoster: {
     width: 110,
     height: 165,
-    borderRadius: 8,
+    borderRadius: BORDER_RADIUS.md,
     marginBottom: 6,
   },
   noSimilarPoster: {
     width: 110,
     height: 165,
-    borderRadius: 8,
-    backgroundColor: '#2c2c2c',
+    borderRadius: BORDER_RADIUS.md,
+    backgroundColor: COLORS.surfaceLight,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 6,
   },
   similarMovieTitle: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 13,
     fontWeight: '600',
     marginBottom: 2,
   },
   similarMovieRating: {
-    color: '#ff9800',
+    color: COLORS.primary,
     fontSize: 12,
     fontWeight: 'bold',
   },

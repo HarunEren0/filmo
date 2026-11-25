@@ -1,42 +1,65 @@
-import React, { useEffect, useState } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  Image, 
-  FlatList, 
+import React, { useEffect, useState, useContext } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Image,
+  FlatList,
   TouchableOpacity,
-  ActivityIndicator
+  ActivityIndicator,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { getActorMovies, getActorDetails, IMAGE_BASE_URL } from '../services/tmdb';
+import { LanguageContext } from '../context/LanguageContext';
+import { dedupeMoviesById } from '../utils/movieHelpers';
+import { COLORS, BORDER_RADIUS } from '../constants/theme';
 import i18n from '../services/i18n';
 
 export default function ActorScreen({ route, navigation }) {
   const { actorId, actorName, actorPhoto } = route.params;
+  const { language } = useContext(LanguageContext);
+
   const [movies, setMovies] = useState([]);
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
-    // Navigasyon başlığını güncelle
     navigation.setOptions({ title: actorName });
 
+    let active = true;
     const fetchData = async () => {
-      const [actorMovies, actorDetails] = await Promise.all([
-        getActorMovies(actorId),
-        getActorDetails(actorId)
-      ]);
-      // Sadece posteri olan filmleri gösterelim ve popülerliğe göre sıralayalım
-      const validMovies = actorMovies
-        .filter(m => m.poster_path)
-        .sort((a, b) => b.popularity - a.popularity);
-      setMovies(validMovies);
-      setDetails(actorDetails);
-      setLoading(false);
+      setLoading(true);
+      setLoadError(false);
+      try {
+        const [actorMovies, actorDetails] = await Promise.all([
+          getActorMovies(actorId, { throwOnError: true }),
+          getActorDetails(actorId, { throwOnError: true }),
+        ]);
+
+        if (!active) return;
+
+        const validMovies = dedupeMoviesById(
+          [],
+          actorMovies
+            .filter((m) => m.poster_path)
+            .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
+        );
+        setMovies(validMovies);
+        setDetails(actorDetails);
+      } catch {
+        if (active) setLoadError(true);
+      } finally {
+        if (active) setLoading(false);
+      }
     };
-    
+
     fetchData();
-  }, [actorId]);
+    return () => {
+      active = false;
+    };
+  }, [actorId, actorName, navigation, language, retryCount]);
 
   const calculateAge = (birthDateStr, endDateStr = null) => {
     if (!birthDateStr) return null;
@@ -51,28 +74,26 @@ export default function ActorScreen({ route, navigation }) {
   };
 
   const renderMovieItem = ({ item }) => (
-    <TouchableOpacity 
+    <TouchableOpacity
       style={styles.movieCard}
       onPress={() => navigation.push('Details', { movieId: item.id })}
     >
-      <Image 
-        source={{ uri: `${IMAGE_BASE_URL}${item.poster_path}` }} 
-        style={styles.poster} 
-      />
+      <Image source={{ uri: `${IMAGE_BASE_URL}${item.poster_path}` }} style={styles.poster} />
     </TouchableOpacity>
   );
 
   return (
     <View style={styles.container}>
-      {/* Oyuncu Üst Bilgisi */}
       <View style={styles.header}>
         {actorPhoto ? (
           <Image source={{ uri: `${IMAGE_BASE_URL}${actorPhoto}` }} style={styles.actorImage} />
         ) : (
-          <View style={styles.noActorImage}><Text style={styles.noActorText}>{i18n.t('none')}</Text></View>
+          <View style={styles.noActorImage}>
+            <Text style={styles.noActorText}>{i18n.t('none')}</Text>
+          </View>
         )}
         <Text style={styles.actorName}>{actorName}</Text>
-        
+
         {details && (
           <View style={styles.infoContainer}>
             {details.birthday && (
@@ -86,7 +107,9 @@ export default function ActorScreen({ route, navigation }) {
               <Text style={styles.infoText}>
                 <Text style={styles.infoLabel}>{i18n.t('dod')}</Text>
                 {details.deathday.split('-').reverse().join('.')}
-                {details.birthday ? ` (${calculateAge(details.birthday, details.deathday)} ${i18n.t('died_at_age')})` : ''}
+                {details.birthday
+                  ? ` (${calculateAge(details.birthday, details.deathday)} ${i18n.t('died_at_age')})`
+                  : ''}
               </Text>
             )}
             {details.place_of_birth && (
@@ -100,15 +123,24 @@ export default function ActorScreen({ route, navigation }) {
       </View>
 
       <Text style={styles.sectionTitle}>{i18n.t('acted_movies')}</Text>
-      
+
       {loading ? (
         <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#ff9800" />
+          <ActivityIndicator size="large" color={COLORS.primary} />
+        </View>
+      ) : loadError ? (
+        <View style={styles.loaderContainer}>
+          <Ionicons name="cloud-offline-outline" size={40} color={COLORS.textMuted} />
+          <Text style={styles.errorText}>{i18n.t('load_error')}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => setRetryCount((v) => v + 1)}>
+            <Ionicons name="refresh" size={18} color={COLORS.textDark} />
+            <Text style={styles.retryButtonText}>{i18n.t('retry')}</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
           data={movies}
-          keyExtractor={(item, index) => item.id.toString() + index}
+          keyExtractor={(item) => String(item.id)}
           renderItem={renderMovieItem}
           numColumns={3}
           contentContainerStyle={styles.listContainer}
@@ -123,65 +155,87 @@ export default function ActorScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: COLORS.background,
   },
   header: {
     alignItems: 'center',
     paddingVertical: 20,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: COLORS.surface,
     borderBottomWidth: 1,
-    borderBottomColor: '#2c2c2c',
+    borderBottomColor: COLORS.border,
   },
   actorImage: {
     width: 100,
     height: 140,
-    borderRadius: 16,
+    borderRadius: BORDER_RADIUS.xl,
     marginBottom: 10,
     borderWidth: 2,
-    borderColor: '#ff9800',
+    borderColor: COLORS.primary,
   },
   noActorImage: {
     width: 100,
     height: 140,
-    borderRadius: 16,
+    borderRadius: BORDER_RADIUS.xl,
     marginBottom: 10,
-    backgroundColor: '#2c2c2c',
+    backgroundColor: COLORS.surfaceLight,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#ff9800',
+    borderColor: COLORS.primary,
   },
   noActorText: {
-    color: '#888',
+    color: COLORS.textMuted,
   },
   actorName: {
     fontSize: 22,
     fontWeight: 'bold',
-    color: '#fff',
+    color: COLORS.text,
   },
   infoContainer: {
     marginTop: 10,
-    alignItems: 'center'
+    alignItems: 'center',
+    paddingHorizontal: 16,
   },
   infoText: {
     color: '#ccc',
     fontSize: 14,
-    marginBottom: 4
+    marginBottom: 4,
+    textAlign: 'center',
   },
   infoLabel: {
     fontWeight: 'bold',
-    color: '#888'
+    color: COLORS.textMuted,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff',
+    color: COLORS.text,
     padding: 16,
   },
   loaderContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  errorText: {
+    color: '#bbb',
+    textAlign: 'center',
+    marginTop: 12,
+    marginBottom: 16,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primary,
+    borderRadius: 22,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  retryButtonText: {
+    color: COLORS.textDark,
+    fontWeight: 'bold',
+    marginLeft: 6,
   },
   listContainer: {
     paddingHorizontal: 12,
@@ -193,12 +247,12 @@ const styles = StyleSheet.create({
   },
   movieCard: {
     width: '31%',
-    aspectRatio: 2/3,
-    borderRadius: 8,
+    aspectRatio: 2 / 3,
+    borderRadius: BORDER_RADIUS.md,
     overflow: 'hidden',
   },
   poster: {
     width: '100%',
     height: '100%',
-  }
+  },
 });

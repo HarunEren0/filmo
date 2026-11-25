@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getUserProfile } from '../services/storage';
 import { LanguageContext } from '../context/LanguageContext';
+import { COLORS } from '../constants/theme';
 import i18n from '../services/i18n';
 
 // Ekranlar
@@ -24,38 +25,38 @@ import ActorScreen from '../screens/ActorScreen';
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// Koyu temamız
 const CustomDarkTheme = {
   ...DarkTheme,
   colors: {
     ...DarkTheme.colors,
-    primary: '#ff9800',
-    background: '#121212',
-    card: '#1e1e1e',
-    text: '#ffffff',
-    border: '#272727',
+    primary: COLORS.primary,
+    background: COLORS.background,
+    card: COLORS.surface,
+    text: COLORS.text,
+    border: COLORS.border,
   },
 };
 
-// Alt Navigasyon Çubuğu (Bottom Tabs)
 function MainTabs() {
   const insets = useSafeAreaInsets();
-  // Tab isimlerinin dil değiştiğinde güncellenmesi için render esnasında i18n çağırıyoruz
+  // Dil değiştiğinde sekme başlıklarının anında güncellenmesi için context'i dinle
+  useContext(LanguageContext);
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        headerStyle: { backgroundColor: '#1e1e1e', shadowColor: 'transparent' },
-        headerTintColor: '#fff',
+        headerStyle: { backgroundColor: COLORS.surface, shadowColor: 'transparent' },
+        headerTintColor: COLORS.text,
         headerTitleStyle: { fontWeight: 'bold' },
         tabBarStyle: {
-          backgroundColor: '#1e1e1e',
-          borderTopColor: '#272727',
+          backgroundColor: COLORS.surface,
+          borderTopColor: COLORS.border,
           paddingBottom: Math.max(insets.bottom, 5),
           paddingTop: 5,
           height: 60 + insets.bottom,
         },
-        tabBarActiveTintColor: '#ff9800',
-        tabBarInactiveTintColor: '#888',
+        tabBarActiveTintColor: COLORS.primary,
+        tabBarInactiveTintColor: COLORS.textMuted,
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
 
@@ -82,14 +83,9 @@ export default function AppNavigator() {
   const { language, isLanguageLoaded } = useContext(LanguageContext);
 
   useEffect(() => {
-    // Uygulama açıldığında profilin var olup olmadığını kontrol et
     const checkProfile = async () => {
       const profile = await getUserProfile();
-      if (profile && profile.name) {
-        setHasProfile(true);
-      } else {
-        setHasProfile(false);
-      }
+      setHasProfile(Boolean(profile && profile.name));
       setIsLoading(false);
     };
     checkProfile();
@@ -97,56 +93,58 @@ export default function AppNavigator() {
 
   if (isLoading || !isLanguageLoaded) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#ff9800" />
+      <View style={{ flex: 1, backgroundColor: COLORS.background, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
       </View>
     );
   }
 
-  let initialRoute = "LanguageSelection";
+  let initialRoute = 'LanguageSelection';
   if (language) {
-    initialRoute = hasProfile ? "MainTabs" : "Onboarding";
+    initialRoute = hasProfile ? 'MainTabs' : 'Onboarding';
   }
 
   return (
     <NavigationContainer theme={CustomDarkTheme}>
-      <Stack.Navigator 
+      <Stack.Navigator
         initialRouteName={initialRoute}
         screenOptions={{
-          headerStyle: { backgroundColor: '#1e1e1e' },
-          headerTintColor: '#fff',
+          headerStyle: { backgroundColor: COLORS.surface },
+          headerTintColor: COLORS.text,
         }}
       >
-        <Stack.Screen 
-          name="LanguageSelection" 
-          component={LanguageSelectionScreen} 
-          options={{ headerShown: false }} 
+        <Stack.Screen
+          name="LanguageSelection"
+          component={LanguageSelectionScreen}
+          options={{ headerShown: false }}
         />
-        <Stack.Screen 
-          name="Onboarding" 
-          component={OnboardingScreen} 
-          options={{ headerShown: false }} 
+        <Stack.Screen
+          name="Onboarding"
+          component={OnboardingScreen}
+          options={{ headerShown: false }}
         />
-        <Stack.Screen 
-          name="MainTabs" 
-          component={MainTabs} 
-          options={{ headerShown: false }} 
+        <Stack.Screen
+          name="MainTabs"
+          component={MainTabs}
+          options={{ headerShown: false }}
         />
-        {/* Detay ekranı tab bar'ın üstünde tam ekran çıkması için buraya eklendi */}
-        <Stack.Screen 
-          name="Details" 
-          component={DetailsScreen} 
-          options={{ title: 'Detaylar', headerBackTitleVisible: false }} 
+        <Stack.Screen
+          name="Details"
+          component={DetailsScreen}
+          options={{ title: i18n.t('view_details'), headerBackTitleVisible: false }}
         />
-        <Stack.Screen 
-          name="CustomList" 
-          component={CustomListScreen} 
-          options={({ route }) => ({ title: route.params?.listName || 'Özel Listem', headerBackTitleVisible: false })} 
+        <Stack.Screen
+          name="CustomList"
+          component={CustomListScreen}
+          options={({ route }) => ({
+            title: route.params?.listName || i18n.t('custom_list_default'),
+            headerBackTitleVisible: false,
+          })}
         />
-        <Stack.Screen 
-          name="Actor" 
-          component={ActorScreen} 
-          options={{ headerBackTitleVisible: false }} 
+        <Stack.Screen
+          name="Actor"
+          component={ActorScreen}
+          options={{ headerBackTitleVisible: false }}
         />
       </Stack.Navigator>
     </NavigationContainer>

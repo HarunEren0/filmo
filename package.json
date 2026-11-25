@@ -1,6 +1,6 @@
 {
-  "name": "amazing-faraday",
-  "version": "1.0.0",
+  "name": "filmo",
+  "version": "1.0.1",
   "main": "index.js",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -30,6 +30,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "doctor": "npx expo-doctor",
+    "test": "node --test tests/*.test.mjs",
     "verify": "npx expo export --output-dir /tmp/filmo-verify"
   },
   "private": true

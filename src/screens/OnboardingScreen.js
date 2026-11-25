@@ -1,15 +1,19 @@
 import React, { useState } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TextInput, 
-  TouchableOpacity, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
   Image,
-  Alert
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { saveUserProfile } from '../services/storage';
+import { normalizePickerAssetUri } from '../utils/movieHelpers';
+import { COLORS, BORDER_RADIUS } from '../constants/theme';
 import i18n from '../services/i18n';
 
 export default function OnboardingScreen({ navigation }) {
@@ -17,63 +21,62 @@ export default function OnboardingScreen({ navigation }) {
   const [surname, setSurname] = useState('');
   const [photoUri, setPhotoUri] = useState(null);
 
-  // Fotoğraf seçme işlemi
   const pickImage = async () => {
-    // Kullanıcıdan galeri izni iste
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    
-    if (permissionResult.granted === false) {
-      Alert.alert("Hata", "Fotoğraf ekleyebilmek için galeri izni gereklidir.");
+
+    if (!permissionResult.granted) {
+      Alert.alert(i18n.t('error'), i18n.t('gallery_permission_error'));
       return;
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images, // Sadece resimler
-      allowsEditing: true, // Kullanıcı fotoğrafı kırpabilsin
-      aspect: [1, 1], // Kare formatta kırpılsın
-      quality: 0.5,
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.4,
+      base64: true,
     });
 
-    if (!result.canceled) {
-      setPhotoUri(result.assets[0].uri);
+    if (!result.canceled && result.assets?.[0]) {
+      setPhotoUri(normalizePickerAssetUri(result.assets[0]));
     }
   };
 
   const handleFinish = async () => {
     if (!name.trim()) {
-      Alert.alert("Eksik Bilgi", "Lütfen adınızı giriniz.");
+      Alert.alert(i18n.t('missing_info'), i18n.t('name_required'));
       return;
     }
 
-    // Bilgileri AsyncStorage'a kaydediyoruz
     const success = await saveUserProfile({
-      name,
-      surname,
+      name: name.trim(),
+      surname: surname.trim(),
       photo: photoUri,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     });
 
     if (success) {
-      // Kayıt başarılıysa Ana uygulamaya (MainTabs) yönlendir
       navigation.replace('MainTabs');
     } else {
-      Alert.alert("Hata", "Profil kaydedilirken bir sorun oluştu.");
+      Alert.alert(i18n.t('error'), i18n.t('profile_save_error'));
     }
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={styles.container}
+    >
       <Text style={styles.title}>{i18n.t('welcome')}</Text>
       <Text style={styles.subtitle}>{i18n.t('onboarding_desc')}</Text>
 
-      {/* Profil Fotoğrafı Seçimi */}
       <TouchableOpacity onPress={pickImage} style={styles.imagePicker}>
         {photoUri ? (
           <Image source={{ uri: photoUri }} style={styles.image} />
         ) : (
           <View style={styles.imagePlaceholder}>
             <Text style={styles.imagePlaceholderText}>📷</Text>
-            <Text style={styles.imagePlaceholderTextSm}>Fotoğraf Ekle</Text>
+            <Text style={styles.imagePlaceholderTextSm}>{i18n.t('add_photo')}</Text>
           </View>
         )}
       </TouchableOpacity>
@@ -83,16 +86,16 @@ export default function OnboardingScreen({ navigation }) {
         <TextInput
           style={styles.input}
           placeholder={i18n.t('name_placeholder')}
-          placeholderTextColor="#888"
+          placeholderTextColor={COLORS.textMuted}
           value={name}
           onChangeText={setName}
         />
 
-        <Text style={styles.label}>Soyadınız (İsteğe Bağlı)</Text>
+        <Text style={styles.label}>{i18n.t('surname_optional')}</Text>
         <TextInput
           style={styles.input}
-          placeholder="Örn: Doe"
-          placeholderTextColor="#888"
+          placeholder={i18n.t('surname_placeholder')}
+          placeholderTextColor={COLORS.textMuted}
           value={surname}
           onChangeText={setSurname}
         />
@@ -101,26 +104,26 @@ export default function OnboardingScreen({ navigation }) {
       <TouchableOpacity style={styles.button} onPress={handleFinish}>
         <Text style={styles.buttonText}>{i18n.t('start')}</Text>
       </TouchableOpacity>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: COLORS.background,
     padding: 20,
     justifyContent: 'center',
     alignItems: 'center',
   },
   title: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 28,
     fontWeight: 'bold',
     marginBottom: 10,
   },
   subtitle: {
-    color: '#aaaaaa',
+    color: COLORS.textSecondary,
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 40,
@@ -133,24 +136,24 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 60,
     borderWidth: 2,
-    borderColor: '#ff9800',
+    borderColor: COLORS.primary,
   },
   imagePlaceholder: {
     width: 120,
     height: 120,
     borderRadius: 60,
-    backgroundColor: '#2c2c2c',
+    backgroundColor: COLORS.surfaceLight,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#ff9800',
+    borderColor: COLORS.primary,
     borderStyle: 'dashed',
   },
   imagePlaceholderText: {
     fontSize: 30,
   },
   imagePlaceholderTextSm: {
-    color: '#888',
+    color: COLORS.textMuted,
     fontSize: 12,
     marginTop: 5,
   },
@@ -159,30 +162,30 @@ const styles = StyleSheet.create({
     marginBottom: 30,
   },
   label: {
-    color: '#aaaaaa',
+    color: COLORS.textSecondary,
     marginBottom: 8,
     fontSize: 14,
     marginLeft: 4,
   },
   input: {
-    backgroundColor: '#1e1e1e',
-    color: '#ffffff',
-    borderRadius: 12,
+    backgroundColor: COLORS.surface,
+    color: COLORS.text,
+    borderRadius: BORDER_RADIUS.lg,
     padding: 16,
     marginBottom: 16,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#2c2c2c',
+    borderColor: COLORS.border,
   },
   button: {
-    backgroundColor: '#ff9800',
+    backgroundColor: COLORS.primary,
     width: '100%',
     padding: 16,
-    borderRadius: 12,
+    borderRadius: BORDER_RADIUS.lg,
     alignItems: 'center',
   },
   buttonText: {
-    color: '#121212',
+    color: COLORS.textDark,
     fontSize: 18,
     fontWeight: 'bold',
   },

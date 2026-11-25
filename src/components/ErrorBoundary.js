@@ -1,14 +1,16 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS } from '../constants/theme';
+import { COLORS, BORDER_RADIUS } from '../constants/theme';
+import i18n from '../services/i18n';
 
 export default class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { 
-      hasError: false, 
-      error: null 
+    this.state = {
+      hasError: false,
+      error: null,
     };
   }
 
@@ -32,11 +34,9 @@ export default class ErrorBoundary extends React.Component {
             <View style={styles.iconContainer}>
               <Ionicons name="alert-circle" size={64} color={COLORS.primary} />
             </View>
-            
-            <Text style={styles.title}>Bir Sorun Oluştu</Text>
-            <Text style={styles.message}>
-              Beklenmeyen bir hata meydana geldi. Verileriniz güvende, lütfen tekrar deneyin.
-            </Text>
+
+            <Text style={styles.title}>{i18n.t('error_boundary_title')}</Text>
+            <Text style={styles.message}>{i18n.t('error_boundary_message')}</Text>
 
             {__DEV__ && this.state.error && (
               <View style={styles.debugBox}>
@@ -46,13 +46,13 @@ export default class ErrorBoundary extends React.Component {
               </View>
             )}
 
-            <TouchableOpacity 
-              style={styles.button} 
+            <TouchableOpacity
+              style={styles.button}
               onPress={this.handleReset}
               activeOpacity={0.8}
             >
               <Ionicons name="refresh" size={20} color={COLORS.textDark} style={{ marginRight: 8 }} />
-              <Text style={styles.buttonText}>Tekrar Dene</Text>
+              <Text style={styles.buttonText}>{i18n.t('retry')}</Text>
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -102,7 +102,7 @@ const styles = StyleSheet.create({
   debugBox: {
     backgroundColor: COLORS.surface,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: BORDER_RADIUS.md,
     marginBottom: 20,
     width: '100%',
     borderWidth: 1,
@@ -119,7 +119,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     paddingVertical: 14,
     paddingHorizontal: 28,
-    borderRadius: 12,
+    borderRadius: BORDER_RADIUS.lg,
   },
   buttonText: {
     color: COLORS.textDark,

@@ -14,10 +14,7 @@
       "adaptiveIcon": {
         "backgroundColor": "#1e1e1e",
         "foregroundImage": "./assets/filmo-icon.png"
-      },
-      "permissions": [
-        "android.permission.RECORD_AUDIO"
-      ]
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"

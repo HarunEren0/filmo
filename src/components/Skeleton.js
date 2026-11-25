@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { View, StyleSheet, Animated } from 'react-native';
+import { COLORS, BORDER_RADIUS } from '../constants/theme';
 
-export function SkeletonBox({ width, height, borderRadius = 8, style }) {
+export function SkeletonBox({ width, height, borderRadius = BORDER_RADIUS.md, style }) {
   const pulseAnim = useRef(new Animated.Value(0.3)).current;
 
   useEffect(() => {
@@ -66,7 +67,7 @@ export function SkeletonRow() {
             key={item}
             width={120}
             height={180}
-            borderRadius={8}
+            borderRadius={BORDER_RADIUS.md}
             style={styles.posterItem}
           />
         ))}
@@ -89,10 +90,10 @@ export default function SkeletonScreen() {
 const styles = StyleSheet.create({
   screenContainer: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: COLORS.background,
   },
   skeletonBase: {
-    backgroundColor: '#262626',
+    backgroundColor: COLORS.card,
   },
   heroContainer: {
     width: '100%',

@@ -2,14 +2,13 @@ import React, { useContext } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LanguageContext } from '../context/LanguageContext';
+import { COLORS, BORDER_RADIUS } from '../constants/theme';
 
 export default function LanguageSelectionScreen({ navigation }) {
   const { switchLanguage } = useContext(LanguageContext);
 
   const handleSelectLanguage = async (langCode) => {
     await switchLanguage(langCode);
-    // Seçim yapıldıktan sonra Onboarding'e (veya AppNavigator mantığına) yönlendir
-    // AppNavigator'daki stack yapısında bu sayfa açılışsa, navigation.replace kullanılabilir
     navigation.replace('Onboarding');
   };
 
@@ -21,15 +20,15 @@ export default function LanguageSelectionScreen({ navigation }) {
         <Text style={styles.subtitleEn}>Select Your Preferred Language</Text>
 
         <View style={styles.buttonContainer}>
-          <TouchableOpacity 
-            style={styles.langButton} 
+          <TouchableOpacity
+            style={styles.langButton}
             onPress={() => handleSelectLanguage('tr-TR')}
           >
             <Text style={styles.langButtonText}>Türkçe</Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.langButton} 
+
+          <TouchableOpacity
+            style={styles.langButton}
             onPress={() => handleSelectLanguage('en-US')}
           >
             <Text style={styles.langButtonText}>English</Text>
@@ -43,7 +42,7 @@ export default function LanguageSelectionScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: COLORS.background,
   },
   content: {
     flex: 1,
@@ -54,19 +53,19 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 48,
     fontWeight: 'bold',
-    color: '#ff9800',
+    color: COLORS.primary,
     marginBottom: 40,
   },
   subtitle: {
     fontSize: 20,
-    color: '#fff',
+    color: COLORS.text,
     fontWeight: 'bold',
     marginBottom: 5,
     textAlign: 'center',
   },
   subtitleEn: {
     fontSize: 16,
-    color: '#888',
+    color: COLORS.textMuted,
     marginBottom: 40,
     textAlign: 'center',
   },
@@ -75,17 +74,17 @@ const styles = StyleSheet.create({
     maxWidth: 300,
   },
   langButton: {
-    backgroundColor: '#1e1e1e',
+    backgroundColor: COLORS.surface,
     paddingVertical: 18,
-    borderRadius: 12,
+    borderRadius: BORDER_RADIUS.lg,
     borderWidth: 1,
-    borderColor: '#ff9800',
+    borderColor: COLORS.primary,
     marginBottom: 16,
     alignItems: 'center',
   },
   langButtonText: {
-    color: '#fff',
+    color: COLORS.text,
     fontSize: 18,
     fontWeight: 'bold',
-  }
+  },
 });

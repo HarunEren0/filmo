@@ -1,35 +1,56 @@
-import React, { useState, useCallback } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  FlatList, 
-  Image, 
+import React, { useState, useCallback, useContext, useMemo } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  Image,
   TouchableOpacity,
   Modal,
   TextInput,
+  ScrollView,
   KeyboardAvoidingView,
   Platform,
   Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getWatchedMovies, getWatchlist, removeWatchedMovie, removeFromWatchlist, updateWatchedMovie } from '../services/storage';
+import {
+  getWatchedMovies,
+  getWatchlist,
+  removeWatchedMovie,
+  removeFromWatchlist,
+  updateWatchedMovie,
+} from '../services/storage';
 import { IMAGE_BASE_URL } from '../services/tmdb';
+import { LanguageContext } from '../context/LanguageContext';
+import { filterAndSortMovies, validateWatchedEdit } from '../utils/movieHelpers';
+import { COLORS, BORDER_RADIUS } from '../constants/theme';
 import { Ionicons } from '@expo/vector-icons';
 import i18n from '../services/i18n';
 
+const SORT_OPTIONS = [
+  { key: 'recent', labelKey: 'sort_recent' },
+  { key: 'rating_desc', labelKey: 'sort_rating' },
+  { key: 'date_desc', labelKey: 'sort_date' },
+  { key: 'title_asc', labelKey: 'sort_title' },
+];
+
 export default function ListsScreen({ navigation, route }) {
-  const [activeTab, setActiveTab] = useState('watched'); 
+  const { language } = useContext(LanguageContext);
+
+  const [activeTab, setActiveTab] = useState('watched');
   const [watchedList, setWatchedList] = useState([]);
   const [watchlist, setWatchlist] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('recent');
+
   const [editingMovie, setEditingMovie] = useState(null);
   const [editRating, setEditRating] = useState('');
   const [editReview, setEditReview] = useState('');
   const [editDate, setEditDate] = useState('');
 
   const loadData = async () => {
-    const watched = await getWatchedMovies();
-    const planned = await getWatchlist();
+    const [watched, planned] = await Promise.all([getWatchedMovies(), getWatchlist()]);
     setWatchedList(watched);
     setWatchlist(planned);
   };
@@ -44,23 +65,34 @@ export default function ListsScreen({ navigation, route }) {
     }, [navigation, route.params?.activeTab])
   );
 
+  const activeSourceList = activeTab === 'watched' ? watchedList : watchlist;
+
+  const displayedMovies = useMemo(
+    () =>
+      filterAndSortMovies(activeSourceList, {
+        query: searchQuery,
+        sortBy,
+        listType: activeTab,
+      }),
+    [activeSourceList, searchQuery, sortBy, activeTab]
+  );
+
   const handleDelete = async (movieId) => {
     if (activeTab === 'watched') {
       await removeWatchedMovie(movieId);
     } else {
       await removeFromWatchlist(movieId);
     }
-    // Sildikten sonra listeyi yenile
     loadData();
   };
 
   const formatDate = (dateString) => {
     if (!dateString) return '';
     const date = new Date(dateString);
-    return date.toLocaleDateString(i18n.locale?.startsWith('en') ? 'en-US' : 'tr-TR', {
+    return date.toLocaleDateString(language?.startsWith('en') ? 'en-US' : 'tr-TR', {
       year: 'numeric',
       month: 'long',
-      day: 'numeric'
+      day: 'numeric',
     });
   };
 
@@ -74,27 +106,16 @@ export default function ListsScreen({ navigation, route }) {
   };
 
   const saveEdit = async () => {
-    const trimmedRating = editRating.trim();
-    const rating = trimmedRating === '' ? null : Number(trimmedRating);
-    if (rating !== null && (!Number.isFinite(rating) || rating < 1 || rating > 10)) {
+    const validation = validateWatchedEdit({ ratingText: editRating, dateText: editDate });
+    if (!validation.valid) {
       Alert.alert(i18n.t('edit_watched'), i18n.t('invalid_watched_info'));
       return;
     }
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(editDate.trim());
-    if (!match) {
-      Alert.alert(i18n.t('edit_watched'), i18n.t('invalid_watched_info'));
-      return;
-    }
-    const [, year, month, day] = match;
-    const localDate = new Date(Number(year), Number(month) - 1, Number(day), 12);
-    if (localDate.getFullYear() !== Number(year) || localDate.getMonth() !== Number(month) - 1 || localDate.getDate() !== Number(day)) {
-      Alert.alert(i18n.t('edit_watched'), i18n.t('invalid_watched_info'));
-      return;
-    }
+
     const saved = await updateWatchedMovie(editingMovie.id, {
-      userRating: rating,
+      userRating: validation.rating,
       userReview: editReview.trim(),
-      watchedAt: localDate.toISOString(),
+      watchedAt: validation.watchedAt,
     });
     if (saved) {
       setEditingMovie(null);
@@ -104,13 +125,13 @@ export default function ListsScreen({ navigation, route }) {
 
   const renderMovieItem = ({ item }) => (
     <View style={styles.movieCard}>
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.movieContent}
         onPress={() => navigation.navigate('Details', { movieId: item.id })}
       >
         {item.poster_path ? (
-          <Image 
-            source={{ uri: `${IMAGE_BASE_URL}${item.poster_path}` }} 
+          <Image
+            source={{ uri: `${IMAGE_BASE_URL}${item.poster_path}` }}
             style={styles.poster}
           />
         ) : (
@@ -118,86 +139,148 @@ export default function ListsScreen({ navigation, route }) {
             <Text style={styles.noPosterText}>{i18n.t('none')}</Text>
           </View>
         )}
-        
+
         <View style={styles.movieInfo}>
-          <Text style={styles.movieTitle} numberOfLines={2}>{item.title}</Text>
-          
+          <Text style={styles.movieTitle} numberOfLines={2}>
+            {item.title}
+          </Text>
+
           {activeTab === 'watched' ? (
             <>
               <TouchableOpacity style={styles.editButton} onPress={() => openEditor(item)}>
-                <Ionicons name="create-outline" size={15} color="#ff9800" />
+                <Ionicons name="create-outline" size={15} color={COLORS.primary} />
                 <Text style={styles.editButtonText}>{i18n.t('edit_watched')}</Text>
               </TouchableOpacity>
               {item.userRating ? (
                 <View style={styles.ratingContainer}>
-                <Text style={styles.userRating}>⭐ {i18n.t('your_rating')}: {item.userRating}/10</Text>
+                  <Text style={styles.userRating}>
+                    ⭐ {i18n.t('your_rating')}: {item.userRating}/10
+                  </Text>
                 </View>
               ) : null}
-              <Text style={styles.watchDate}>{i18n.t('watched_date_prefix')}: {formatDate(item.watchedAt)}</Text>
+              <Text style={styles.watchDate}>
+                {i18n.t('watched_date_prefix')}: {formatDate(item.watchedAt)}
+              </Text>
               {item.userReview ? (
-                <Text style={styles.review} numberOfLines={2}>"{item.userReview}"</Text>
+                <Text style={styles.review} numberOfLines={2}>
+                  "{item.userReview}"
+                </Text>
               ) : null}
             </>
           ) : (
             <>
-              <Text style={styles.movieDate}>{item.release_date?.split('-')[0]}</Text>
+              <Text style={styles.movieDate}>
+                {item.release_date?.split('-')[0] || i18n.t('no_date')}
+              </Text>
               <Text style={styles.tmdbRating}>⭐ TMDB: {item.vote_average?.toFixed(1)}</Text>
             </>
           )}
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity 
-        style={styles.deleteButton} 
-        onPress={() => handleDelete(item.id)}
-      >
-        <Ionicons name="trash-outline" size={24} color="#ff4444" />
+      <TouchableOpacity style={styles.deleteButton} onPress={() => handleDelete(item.id)}>
+        <Ionicons name="trash-outline" size={24} color={COLORS.danger} />
       </TouchableOpacity>
     </View>
   );
 
   return (
     <View style={styles.container}>
-      {/* Sekmeler (Tabs) */}
+      {/* Sekmeler */}
       <View style={styles.tabContainer}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.tabButton, activeTab === 'watched' && styles.activeTab]}
           onPress={() => setActiveTab('watched')}
         >
           <Text style={[styles.tabText, activeTab === 'watched' && styles.activeTabText]}>
-            {i18n.t('watched_movies')}
+            {i18n.t('watched_movies')} ({watchedList.length})
           </Text>
         </TouchableOpacity>
-        
-        <TouchableOpacity 
+
+        <TouchableOpacity
           style={[styles.tabButton, activeTab === 'watchlist' && styles.activeTab]}
           onPress={() => setActiveTab('watchlist')}
         >
           <Text style={[styles.tabText, activeTab === 'watchlist' && styles.activeTabText]}>
-            {i18n.t('watchlist')}
+            {i18n.t('watchlist')} ({watchlist.length})
           </Text>
         </TouchableOpacity>
       </View>
 
+      {/* Liste İçi Arama ve Sıralama */}
+      {activeSourceList.length > 0 && (
+        <View style={styles.controlsBar}>
+          <View style={styles.searchBar}>
+            <Ionicons name="search" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder={i18n.t('search_in_list')}
+              placeholderTextColor={COLORS.textMuted}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCorrect={false}
+            />
+            {searchQuery.length > 0 ? (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={16} color={COLORS.textMuted} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.sortRow}
+          >
+            {SORT_OPTIONS.map((option) => {
+              const active = sortBy === option.key;
+              return (
+                <TouchableOpacity
+                  key={option.key}
+                  style={[styles.sortChip, active && styles.sortChipActive]}
+                  onPress={() => setSortBy(option.key)}
+                >
+                  <Text style={[styles.sortChipText, active && styles.sortChipTextActive]}>
+                    {i18n.t(option.labelKey)}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
       {/* Listeler */}
       <FlatList
-        data={activeTab === 'watched' ? watchedList : watchlist}
-        keyExtractor={(item) => item.id.toString()}
+        data={displayedMovies}
+        keyExtractor={(item) => String(item.id)}
         renderItem={renderMovieItem}
         contentContainerStyle={styles.listContainer}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>
-              {activeTab === 'watched' 
-                ? i18n.t('watched_empty')
-                : i18n.t('watchlist_empty')}
+              {searchQuery.trim()
+                ? i18n.t('no_matching_movies')
+                : activeTab === 'watched'
+                  ? i18n.t('watched_empty')
+                  : i18n.t('watchlist_empty')}
             </Text>
           </View>
         }
       />
-      <Modal visible={!!editingMovie} transparent animationType="fade" onRequestClose={() => setEditingMovie(null)}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBackdrop}>
+
+      {/* İzleme Bilgilerini Düzenleme Modalı */}
+      <Modal
+        visible={!!editingMovie}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditingMovie(null)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalBackdrop}
+        >
           <View style={styles.editModal}>
             <Text style={styles.modalTitle}>{i18n.t('edit_watched')}</Text>
             <Text style={styles.inputLabel}>{i18n.t('rating_label')}</Text>
@@ -247,11 +330,11 @@ export default function ListsScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: COLORS.background,
   },
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: '#1e1e1e',
+    backgroundColor: COLORS.surface,
     paddingTop: 10,
   },
   tabButton: {
@@ -262,27 +345,71 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
   },
   activeTab: {
-    borderBottomColor: '#ff9800',
+    borderBottomColor: COLORS.primary,
   },
   tabText: {
-    color: '#888888',
-    fontSize: 16,
+    color: COLORS.textMuted,
+    fontSize: 15,
     fontWeight: 'bold',
   },
   activeTabText: {
-    color: '#ff9800',
+    color: COLORS.primary,
+  },
+  controlsBar: {
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surfaceLight,
+    borderRadius: BORDER_RADIUS.xxl,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginBottom: 10,
+  },
+  searchInput: {
+    flex: 1,
+    color: COLORS.text,
+    fontSize: 14,
+    paddingVertical: 0,
+  },
+  sortRow: {
+    gap: 8,
+  },
+  sortChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: BORDER_RADIUS.xl,
+    backgroundColor: COLORS.surfaceLight,
+    marginRight: 8,
+  },
+  sortChipActive: {
+    backgroundColor: COLORS.primary,
+  },
+  sortChipText: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sortChipTextActive: {
+    color: COLORS.textDark,
   },
   listContainer: {
     padding: 16,
   },
   movieCard: {
     flexDirection: 'row',
-    backgroundColor: '#1e1e1e',
-    borderRadius: 8,
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.md,
     marginBottom: 16,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#272727',
+    borderColor: COLORS.border,
     alignItems: 'center',
   },
   movieContent: {
@@ -296,12 +423,12 @@ const styles = StyleSheet.create({
   noPoster: {
     width: 100,
     height: 150,
-    backgroundColor: '#2c2c2c',
+    backgroundColor: COLORS.surfaceLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
   noPosterText: {
-    color: '#888',
+    color: COLORS.textMuted,
     fontSize: 12,
   },
   movieInfo: {
@@ -310,17 +437,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   movieTitle: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 16,
     fontWeight: 'bold',
     marginBottom: 8,
   },
   ratingContainer: {
-    backgroundColor: '#2c2c2c',
+    backgroundColor: COLORS.surfaceLight,
     alignSelf: 'flex-start',
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 4,
+    borderRadius: BORDER_RADIUS.sm,
     marginBottom: 6,
   },
   editButton: {
@@ -329,14 +456,19 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     marginBottom: 7,
   },
-  editButtonText: { color: '#ff9800', fontSize: 12, marginLeft: 4, fontWeight: '600' },
+  editButtonText: {
+    color: COLORS.primary,
+    fontSize: 12,
+    marginLeft: 4,
+    fontWeight: '600',
+  },
   userRating: {
-    color: '#ff9800',
+    color: COLORS.primary,
     fontSize: 12,
     fontWeight: 'bold',
   },
   watchDate: {
-    color: '#888888',
+    color: COLORS.textMuted,
     fontSize: 12,
     marginBottom: 6,
   },
@@ -346,12 +478,12 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   movieDate: {
-    color: '#aaaaaa',
+    color: COLORS.textSecondary,
     fontSize: 14,
     marginBottom: 4,
   },
   tmdbRating: {
-    color: '#aaaaaa',
+    color: COLORS.textSecondary,
     fontSize: 13,
   },
   deleteButton: {
@@ -364,20 +496,68 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyText: {
-    color: '#888888',
+    color: COLORS.textMuted,
     textAlign: 'center',
     fontSize: 16,
     lineHeight: 24,
   },
-  modalBackdrop: { flex: 1, justifyContent: 'center', padding: 22, backgroundColor: 'rgba(0,0,0,0.72)' },
-  editModal: { backgroundColor: '#1e1e1e', borderRadius: 14, padding: 20, borderWidth: 1, borderColor: '#333' },
-  modalTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 16 },
-  inputLabel: { color: '#ccc', fontSize: 13, marginBottom: 6, marginTop: 8 },
-  input: { color: '#fff', backgroundColor: '#292929', borderRadius: 8, borderWidth: 1, borderColor: '#444', paddingHorizontal: 12, paddingVertical: 10 },
-  reviewInput: { minHeight: 84, textAlignVertical: 'top' },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 20 },
-  modalAction: { paddingHorizontal: 16, paddingVertical: 10 },
-  saveAction: { backgroundColor: '#ff9800', borderRadius: 8 },
-  cancelText: { color: '#ccc', fontWeight: '600' },
-  saveText: { color: '#121212', fontWeight: 'bold' },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 22,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+  },
+  editModal: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 14,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+  },
+  modalTitle: {
+    color: COLORS.text,
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 16,
+  },
+  inputLabel: {
+    color: '#ccc',
+    fontSize: 13,
+    marginBottom: 6,
+    marginTop: 8,
+  },
+  input: {
+    color: COLORS.text,
+    backgroundColor: COLORS.surfaceLight,
+    borderRadius: BORDER_RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  reviewInput: {
+    minHeight: 84,
+    textAlignVertical: 'top',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 20,
+  },
+  modalAction: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  saveAction: {
+    backgroundColor: COLORS.primary,
+    borderRadius: BORDER_RADIUS.md,
+  },
+  cancelText: {
+    color: '#ccc',
+    fontWeight: '600',
+  },
+  saveText: {
+    color: COLORS.textDark,
+    fontWeight: 'bold',
+  },
 });
